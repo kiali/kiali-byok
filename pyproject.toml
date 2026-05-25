@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "kiali-byok"
+version = "0.1.0"
+description = "BYOK vector database builder for Kiali documentation — OpenShift Lightspeed RAG"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = [
+    "llama-index-core>=0.12",
+    "llama-index-vector-stores-faiss>=0.3",
+    "llama-index-embeddings-huggingface>=0.4",
+    "faiss-cpu>=1.8",
+    "sentence-transformers>=3.0",
+    "beautifulsoup4>=4.12",
+    "requests>=2.32",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "responses>=0.25",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+build-index = "build_index:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"

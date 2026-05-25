@@ -1,0 +1,169 @@
+name: Release — Build, Push and Version Bump
+
+# Triggered manually from the GitHub Actions UI.
+# The user selects the version bump type; the workflow:
+#   1. Reads the current version from VERSION
+#   2. Computes the next version (major / minor / patch)
+#   3. Builds the container image and pushes it to Quay.io with the new tag
+#   4. Commits the updated VERSION file and creates a git tag
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump type"
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      dry_run:
+        description: "Dry run — build image but do NOT push or commit"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+env:
+  IMAGE_REGISTRY: quay.io
+  IMAGE_ORG: aljesug
+  IMAGE_NAME: kiali-byok
+
+jobs:
+  release:
+    name: Release (${{ github.event.inputs.bump }} bump)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # needed to push VERSION commit + git tag
+      packages: write
+
+    outputs:
+      new_version: ${{ steps.bump.outputs.new_version }}
+      image: ${{ steps.bump.outputs.image }}
+
+    steps:
+      # -----------------------------------------------------------------------
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          # Use a token that can push back to the repo.
+          # Create a fine-grained PAT with "Contents: write" and store it as
+          # RELEASE_TOKEN secret.  Falls back to GITHUB_TOKEN for forks.
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      - name: Compute next version
+        id: bump
+        run: |
+          set -euo pipefail
+
+          CURRENT=$(cat VERSION | tr -d '[:space:]')
+          echo "Current version: ${CURRENT}"
+
+          # Strip leading 'v'
+          SEMVER="${CURRENT#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "${SEMVER}"
+
+          BUMP="${{ github.event.inputs.bump }}"
+          case "${BUMP}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          IMAGE="${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}:${NEW_VERSION}"
+
+          echo "New version:     ${NEW_VERSION}"
+          echo "Image:           ${IMAGE}"
+
+          echo "current_version=${CURRENT}"  >> "$GITHUB_OUTPUT"
+          echo "new_version=${NEW_VERSION}"  >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}"              >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Quay.io
+        if: github.event.inputs.dry_run == 'false'
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USER }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      # Build only (dry run)
+      - name: Build image — dry run (no push)
+        if: github.event.inputs.dry_run == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Containerfile
+          push: false
+          tags: ${{ steps.bump.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Build + push (real release)
+      - name: Build and push image
+        if: github.event.inputs.dry_run == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Containerfile
+          push: true
+          tags: |
+            ${{ steps.bump.outputs.image }}
+            ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      - name: Update VERSION file and create git tag
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          set -euo pipefail
+
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+
+          # Write new version
+          echo "${NEW_VERSION}" > VERSION
+
+          # Commit
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: release ${NEW_VERSION}"
+
+          # Tag
+          git tag -a "${NEW_VERSION}" -m "Release ${NEW_VERSION}"
+
+          # Push commit + tag
+          git push origin HEAD:main
+          git push origin "${NEW_VERSION}"
+
+          echo "Released ${NEW_VERSION} and pushed tag"
+
+      # -----------------------------------------------------------------------
+      - name: Summary
+        run: |
+          DRY="${{ github.event.inputs.dry_run }}"
+          NEW="${{ steps.bump.outputs.new_version }}"
+          IMAGE="${{ steps.bump.outputs.image }}"
+          if [[ "${DRY}" == "true" ]]; then
+            echo "### Dry run — nothing pushed" >> "$GITHUB_STEP_SUMMARY"
+            echo "Would have released **${NEW}** as \`${IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Released ${NEW}" >> "$GITHUB_STEP_SUMMARY"
+            echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Image | \`${IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Also tagged | \`latest\` |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Git tag | \`${NEW}\` |" >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,49 @@
+# Kiali + Istio BYOK Index Configuration
+# -------------------------------------------------------
+# Kiali and Istio are closely related — Kiali is the
+# observability console for Istio. Both knowledge bases
+# are merged into a single index for richer, unified
+# context when answering service mesh questions.
+
+index_id: kiali-istio-docs
+index_name: "Kiali and Istio Service Mesh Documentation"
+
+# -------------------------------------------------------
+# Sources — all documents are combined into one index
+# -------------------------------------------------------
+sources:
+  - type: web
+    base_url: https://kiali.io
+    sitemap_path: /sitemap.xml
+    url_prefixes:
+      - /docs/
+    max_pages: 500
+    request_timeout: 30
+    crawl_delay: 0.1
+
+  - type: web
+    base_url: https://istio.io
+    sitemap_path: /latest/en/sitemap.xml
+    url_prefixes:
+      - /latest/docs/
+      - /latest/about/faq/
+    max_pages: 500
+    request_timeout: 30
+    crawl_delay: 0.1
+
+# -------------------------------------------------------
+# Embedding model
+# -------------------------------------------------------
+# MUST match the embedding model used by OpenShift Lightspeed at query time.
+embedding_model: sentence-transformers/all-mpnet-base-v2
+
+# -------------------------------------------------------
+# Chunking
+# -------------------------------------------------------
+chunk_size: 512
+chunk_overlap: 64
+
+# -------------------------------------------------------
+# Output
+# -------------------------------------------------------
+output_path: ./vector_db/kiali

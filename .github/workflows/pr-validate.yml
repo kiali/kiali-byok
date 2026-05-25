@@ -1,0 +1,71 @@
+name: PR — Build and Validate
+
+# Runs on every pull request to main.
+# Builds the container image (no push) and validates both indexes are correct.
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-validate:
+    name: Build image and validate indexes
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Containerfile
+          push: false
+          tags: kiali-byok:pr-${{ github.event.pull_request.number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker
+
+      - name: Extract indexes from image
+        run: |
+          docker create --name tmp-kiali-byok kiali-byok:pr-${{ github.event.pull_request.number }} true
+          mkdir -p vector_db
+          docker cp tmp-kiali-byok:/rag/vector_db/kiali vector_db/kiali
+          docker cp tmp-kiali-byok:/rag/vector_db/istio  vector_db/istio
+          docker rm tmp-kiali-byok
+
+      - name: Validate indexes
+        run: |
+          python3 -c "
+          import json, sys
+          from pathlib import Path
+
+          required = [
+              'default__vector_store.json',
+              'docstore.json',
+              'index_store.json',
+              'metadata.json',
+          ]
+          ok = True
+          for index in ['kiali', 'istio']:
+              path = Path('vector_db') / index
+              missing = [f for f in required if not (path / f).exists()]
+              if missing:
+                  print(f'FAIL [{index}]: missing files: {missing}')
+                  ok = False
+                  continue
+              meta = json.loads((path / 'metadata.json').read_text())
+              print(
+                  f'OK   [{index}]: index-id={meta[\"index-id\"]}'
+                  f', nodes={meta.get(\"num-nodes\", \"?\")}'
+                  f', docs={meta.get(\"num-documents\", \"?\")}'
+              )
+          sys.exit(0 if ok else 1)
+          "
