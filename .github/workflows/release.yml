@@ -29,7 +29,7 @@ on:
 
 env:
   IMAGE_REGISTRY: quay.io
-  IMAGE_ORG: aljesug
+  IMAGE_ORG: kiali
   IMAGE_NAME: kiali-byok
 
 jobs:
@@ -123,6 +123,26 @@ jobs:
             ${{ env.IMAGE_REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # -----------------------------------------------------------------------
+      - name: Validate index in pushed image
+        if: github.event.inputs.dry_run == 'false'
+        run: |
+          docker create --name tmp-kiali-byok ${{ steps.bump.outputs.image }} true
+          mkdir -p vector_db
+          docker cp tmp-kiali-byok:/rag/vector_db/kiali vector_db/kiali
+          docker rm tmp-kiali-byok
+          python3 -c "
+          import json, sys
+          from pathlib import Path
+          required = ['default__vector_store.json','docstore.json','index_store.json','metadata.json']
+          path = Path('vector_db/kiali')
+          missing = [f for f in required if not (path / f).exists()]
+          if missing:
+              print(f'FAIL: missing {missing}'); sys.exit(1)
+          meta = json.loads((path / 'metadata.json').read_text())
+          print(f'OK: index-id={meta[\"index-id\"]}, nodes={meta.get(\"num-nodes\",\"?\")}, docs={meta.get(\"num-documents\",\"?\")}')
+          "
 
       # -----------------------------------------------------------------------
       - name: Update VERSION file and create git tag
