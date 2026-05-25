@@ -22,7 +22,7 @@ We have curated and optimized specialized knowledge sets for the following compo
 Because Kiali and Istio are tightly related, both knowledge bases are **merged into a single index** at build time for richer, unified context. The image is published at:
 
 ```
-quay.io/kiali/kiali_byok:v0.0.1
+quay.io/kiali/kiali-byok:v0.0.1
 ```
 
 ---
@@ -56,7 +56,7 @@ metadata:
 spec:
   ols:
     rag:
-      - image: quay.io/kiali/kiali_byok:v0.0.1
+      - image: quay.io/kiali/kiali-byok:v0.0.1
         indexPath: /rag/vector_db/kiali
         indexID: kiali-istio-docs
 ```
