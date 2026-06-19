@@ -348,6 +348,10 @@ Examples:
         help="Override max_pages for web source",
     )
     parser.add_argument(
+        "--embedding-model",
+        help="Override the embedding model name or local path",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -380,6 +384,8 @@ def main() -> None:
         config["output_path"] = args.output_path
     if args.index_id:
         config["index_id"] = args.index_id
+    if args.embedding_model:
+        config["embedding_model"] = args.embedding_model
 
     sources = config.get("sources", [config["source"]] if "source" in config else [])
     source_summary = ", ".join(
