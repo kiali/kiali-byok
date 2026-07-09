@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 import responses as resp_lib
 import yaml
 
@@ -20,25 +21,45 @@ import yaml
 
 def _import_helpers():
     """Import lightweight helpers that do not pull in llama_index."""
-    import importlib, sys
+    import importlib
+    import sys
+    import types
 
-    # Stub heavy modules so we can import build_index without installing them
-    for mod in [
-        "llama_index",
-        "llama_index.core",
-        "llama_index.embeddings",
-        "llama_index.embeddings.huggingface",
-        "llama_index.vector_stores",
-        "llama_index.vector_stores.faiss",
-        "faiss",
-        "tqdm",
-    ]:
-        sys.modules.setdefault(mod, MagicMock())
+    core = types.ModuleType("llama_index.core")
+    node_parser = types.ModuleType("llama_index.core.node_parser")
+    storage = types.ModuleType("llama_index.core.storage")
+    storage_context = types.ModuleType("llama_index.core.storage.storage_context")
+    embeddings = types.ModuleType("llama_index.embeddings.huggingface")
+    vector_stores = types.ModuleType("llama_index.vector_stores.faiss")
+    faiss_mod = types.ModuleType("faiss")
 
-    # tqdm.tqdm must be iterable
-    tqdm_mock = MagicMock()
+    core.Document = MagicMock()
+    core.Settings = MagicMock()
+    core.VectorStoreIndex = MagicMock()
+    node_parser.SentenceSplitter = MagicMock()
+    storage_context.StorageContext = MagicMock()
+    embeddings.HuggingFaceEmbedding = MagicMock()
+    vector_stores.FaissVectorStore = MagicMock()
+    faiss_mod.IndexFlatIP = MagicMock()
+
+    sys.modules["llama_index"] = types.ModuleType("llama_index")
+    sys.modules["llama_index.core"] = core
+    sys.modules["llama_index.core.node_parser"] = node_parser
+    sys.modules["llama_index.core.storage"] = storage
+    sys.modules["llama_index.core.storage.storage_context"] = storage_context
+    sys.modules["llama_index.embeddings"] = types.ModuleType("llama_index.embeddings")
+    sys.modules["llama_index.embeddings.huggingface"] = embeddings
+    sys.modules["llama_index.vector_stores"] = types.ModuleType("llama_index.vector_stores")
+    sys.modules["llama_index.vector_stores.faiss"] = vector_stores
+    sys.modules["faiss"] = faiss_mod
+
+    tqdm_mock = types.ModuleType("tqdm")
     tqdm_mock.tqdm = lambda iterable, **kw: iterable
     sys.modules["tqdm"] = tqdm_mock
+
+    if "build_index" in sys.modules:
+        import build_index
+        return importlib.reload(build_index)
 
     import build_index
 
@@ -125,7 +146,7 @@ def test_get_sitemap_urls_network_error():
     resp_lib.add(
         resp_lib.GET,
         "https://kiali.io/sitemap.xml",
-        body=Exception("connection error"),
+        body=requests.exceptions.ConnectionError("connection error"),
     )
     urls = bi._get_sitemap_urls("https://kiali.io", "/sitemap.xml")
     assert urls == []
@@ -205,10 +226,36 @@ def test_config_yaml_is_valid(tmp_path):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     assert "index_id" in cfg
-    assert "source" in cfg
-    assert "type" in cfg["source"]
+    assert "sources" in cfg
+    assert len(cfg["sources"]) >= 1
+    assert any(s.get("type") == "web" for s in cfg["sources"])
+    assert any(s.get("type") == "local" for s in cfg["sources"])
     assert "embedding_model" in cfg
     assert "output_path" in cfg
+
+
+def test_parse_frontmatter():
+    bi = _import_helpers()
+    text = "---\ntitle: Test\ncategory: security\n---\n\nBody content here."
+    frontmatter, body = bi._parse_frontmatter(text)
+    assert frontmatter["title"] == "Test"
+    assert body.startswith("Body content")
+
+
+def test_build_local_document_text():
+    bi = _import_helpers()
+    frontmatter = {
+        "title": "Canary",
+        "category": "traffic-management",
+        "istio_versions": ["1.24"],
+        "crd_types": ["VirtualService"],
+        "description": "Canary routing example.",
+    }
+    text = bi._build_local_document_text(frontmatter, "Example body.")
+    assert "# Canary" in text
+    assert "traffic-management" in text
+    assert "VirtualService" in text
+    assert "Example body." in text
 
 
 def test_metadata_json_written(tmp_path, monkeypatch):
@@ -221,18 +268,19 @@ def test_metadata_json_written(tmp_path, monkeypatch):
     dummy_doc.metadata = {"title": "Test", "docs_url": "https://example.com"}
 
     with patch.object(bi, "load_documents_from_web", return_value=[dummy_doc]):
-        with patch("build_index.HuggingFaceEmbedding"):
-            with patch("build_index.FaissVectorStore"):
-                with patch("build_index.StorageContext"):
-                    with patch("build_index.VectorStoreIndex") as vi_cls:
+        with patch("llama_index.embeddings.huggingface.HuggingFaceEmbedding") as hfe:
+            hfe.return_value.get_text_embedding.return_value = [0.0] * 768
+            with patch("llama_index.vector_stores.faiss.FaissVectorStore"):
+                with patch("llama_index.core.storage.storage_context.StorageContext"):
+                    with patch("llama_index.core.VectorStoreIndex") as vi_cls:
                         vi_inst = MagicMock()
                         vi_cls.return_value = vi_inst
-                        with patch("build_index.SentenceSplitter") as sp_cls:
+                        with patch("llama_index.core.node_parser.SentenceSplitter") as sp_cls:
                             sp_inst = MagicMock()
                             sp_inst.get_nodes_from_documents.return_value = [MagicMock()] * 3
                             sp_cls.return_value = sp_inst
-                            with patch("build_index.faiss"):
-                                with patch("build_index.Settings"):
+                            with patch("faiss.IndexFlatIP"):
+                                with patch("llama_index.core.Settings"):
                                     cfg = {
                                         "index_id": "test-index",
                                         "index_name": "Test Index",
@@ -242,10 +290,7 @@ def test_metadata_json_written(tmp_path, monkeypatch):
                                         "output_path": str(tmp_path / "out"),
                                         "source": {"type": "web"},
                                     }
-                                    # patch embed_model.get_text_embedding
-                                    with patch("build_index.HuggingFaceEmbedding") as hfe:
-                                        hfe.return_value.get_text_embedding.return_value = [0.0] * 768
-                                        bi.build_index(cfg)
+                                    bi.build_index(cfg)
 
     meta_path = tmp_path / "out" / "metadata.json"
     assert meta_path.exists()

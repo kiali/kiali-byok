@@ -31,6 +31,11 @@ sources:
     request_timeout: 30
     crawl_delay: 0.1
 
+  # Curated, production-ready Istio YAML examples (committed in-repo)
+  - type: local
+    local_path: ./docs/istio-yaml-examples
+    file_extensions: [".md"]
+
 # -------------------------------------------------------
 # Embedding model
 # -------------------------------------------------------

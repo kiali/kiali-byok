@@ -31,8 +31,9 @@ RUN uv pip install --system --no-cache \
         pyyaml \
         tqdm
 
-# Copy sources and config
+# Copy sources, config, and curated YAML examples
 COPY build_index.py config.yaml ./
+COPY docs/ ./docs/
 
 # Build a single merged index (Kiali + Istio sources combined)
 RUN python build_index.py \

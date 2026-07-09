@@ -172,25 +172,104 @@ def load_documents_from_web(cfg: dict) -> list:
     return documents
 
 
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Parse optional YAML frontmatter from a markdown document."""
+    if not text.startswith("---"):
+        return {}, text
+
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return {}, text
+
+    try:
+        frontmatter = yaml.safe_load(parts[1]) or {}
+    except yaml.YAMLError:
+        return {}, text
+
+    if not isinstance(frontmatter, dict):
+        return {}, text
+
+    body = parts[2].lstrip("\n")
+    return frontmatter, body
+
+
+def _build_local_document_text(frontmatter: dict, body: str) -> str:
+    """Prepend structured metadata so embeddings capture example context."""
+    header_lines: list[str] = []
+    if title := frontmatter.get("title"):
+        header_lines.append(f"# {title}")
+    if category := frontmatter.get("category"):
+        header_lines.append(f"Category: {category}")
+    if versions := frontmatter.get("istio_versions"):
+        if isinstance(versions, list):
+            header_lines.append(f"Istio versions: {', '.join(str(v) for v in versions)}")
+        else:
+            header_lines.append(f"Istio versions: {versions}")
+    if crds := frontmatter.get("crd_types"):
+        if isinstance(crds, list):
+            header_lines.append(f"CRDs: {', '.join(crds)}")
+        else:
+            header_lines.append(f"CRDs: {crds}")
+    if description := frontmatter.get("description"):
+        header_lines.append(description)
+
+    if not header_lines:
+        return body
+    return "\n\n".join(header_lines) + "\n\n" + body
+
+
 def load_documents_from_local(cfg: dict) -> list:
     """Read markdown/text/HTML files from a local directory."""
-    from llama_index.core import SimpleDirectoryReader
+    from llama_index.core import Document
 
-    local_path = cfg.get("local_path", "./docs")
+    local_path = Path(cfg.get("local_path", "./docs"))
     extensions = cfg.get("file_extensions", [".md", ".rst", ".txt", ".html"])
     logger.info("Reading local files from %s (extensions: %s)", local_path, extensions)
 
-    reader = SimpleDirectoryReader(
-        input_dir=local_path,
-        required_exts=extensions,
-        recursive=True,
-    )
-    documents = reader.load_data()
+    if not local_path.exists():
+        logger.warning("Local path does not exist: %s", local_path)
+        return []
 
-    # Ensure metadata fields expected by OLS are present
-    for doc in documents:
-        doc.metadata.setdefault("title", Path(doc.metadata.get("file_name", "unknown")).stem)
-        doc.metadata.setdefault("docs_url", doc.metadata.get("file_path", ""))
+    documents: list[Document] = []
+    for file_path in sorted(local_path.rglob("*")):
+        if not file_path.is_file() or file_path.suffix not in extensions:
+            continue
+
+        raw_text = file_path.read_text(encoding="utf-8")
+        frontmatter, body = _parse_frontmatter(raw_text)
+        text = _build_local_document_text(frontmatter, body)
+        if len(text.strip()) < 50:
+            logger.debug("Skipping short local file: %s", file_path)
+            continue
+
+        rel_path = file_path.relative_to(local_path)
+        title = frontmatter.get("title") or file_path.stem.replace("-", " ").title()
+        docs_url = frontmatter.get(
+            "docs_url",
+            f"file://{file_path.resolve()}",
+        )
+
+        metadata = {
+            "title": title,
+            "docs_url": docs_url,
+            "file_name": file_path.name,
+            "file_path": str(file_path.resolve()),
+        }
+        for key in ("category", "description"):
+            if key in frontmatter:
+                metadata[key] = frontmatter[key]
+        if versions := frontmatter.get("istio_versions"):
+            metadata["istio_versions"] = (
+                ", ".join(str(v) for v in versions)
+                if isinstance(versions, list)
+                else str(versions)
+            )
+        if crds := frontmatter.get("crd_types"):
+            metadata["crd_types"] = (
+                ", ".join(crds) if isinstance(crds, list) else str(crds)
+            )
+
+        documents.append(Document(text=text, metadata=metadata))
 
     logger.info("Loaded %d documents from local path", len(documents))
     return documents
