@@ -1,6 +1,7 @@
 # Generated index artifacts
 vector_db/
 embeddings_model/
+.hf_cache/
 
 # Python
 __pycache__/

@@ -9,6 +9,8 @@ CONTAINER_TOOL  ?= podman
 CONFIG          ?= config.yaml
 VECTOR_DB_DIR   ?= vector_db/kiali
 EMBEDDING_MODEL ?= sentence-transformers/all-mpnet-base-v2
+HF_HOME         ?= $(CURDIR)/.hf_cache
+export HF_HOME
 
 VERSION        := $(shell cat VERSION | tr -d '[:space:]')
 
