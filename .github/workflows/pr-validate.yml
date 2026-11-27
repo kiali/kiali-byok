@@ -7,13 +7,12 @@ on:
     branches:
       - main
 
+permissions: read-all
+
 jobs:
   build-validate:
     name: Build image and validate index
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout source
