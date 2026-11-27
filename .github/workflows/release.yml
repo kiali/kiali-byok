@@ -32,13 +32,14 @@ env:
   IMAGE_ORG: kiali
   IMAGE_NAME: kiali-byok
 
+permissions: read-all
+
 jobs:
   release:
     name: Release (${{ github.event.inputs.bump }} bump)
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write   # needed to push VERSION commit + git tag
       packages: write
 
     outputs:
@@ -50,10 +51,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          # Use a token that can push back to the repo.
-          # Create a fine-grained PAT with "Contents: write" and store it as
-          # RELEASE_TOKEN secret.  Falls back to GITHUB_TOKEN for forks.
-          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.KIALI_BOT_TOKEN }}
           fetch-depth: 0
 
       # -----------------------------------------------------------------------
@@ -145,6 +143,12 @@ jobs:
           "
 
       # -----------------------------------------------------------------------
+      - name: Configure kiali-bot git
+        if: github.event.inputs.dry_run == 'false'
+        uses: ./.github/actions/configure-kiali-bot-git
+        with:
+          signing-key: ${{ secrets.KIALI_BOT_SIGNING_KEY }}
+
       - name: Update VERSION file and create git tag
         if: github.event.inputs.dry_run == 'false'
         run: |
@@ -155,9 +159,6 @@ jobs:
           # Write new version
           echo "${NEW_VERSION}" > VERSION
 
-          # Commit
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add VERSION
           git commit -m "chore: release ${NEW_VERSION}"
 
